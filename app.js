@@ -47,10 +47,99 @@
     }
   };
 
+  class GameAudio {
+    constructor() {
+      this.enabled = localStorage.getItem("avalon-audio-enabled") !== "false";
+      this.context = null;
+      this.startMessage = "遊戲開始，請確認你的身分，並對其他玩家保守秘密。";
+    }
+
+    supportsSpeech() {
+      return "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
+    }
+
+    async unlock() {
+      if (!this.enabled) return;
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      if (!this.context) this.context = new AudioContext();
+      if (this.context.state === "suspended") {
+        try {
+          await this.context.resume();
+        } catch (_) {}
+      }
+    }
+
+    setEnabled(enabled) {
+      this.enabled = Boolean(enabled);
+      localStorage.setItem("avalon-audio-enabled", String(this.enabled));
+      if (!this.enabled && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (this.enabled) this.unlock();
+    }
+
+    playOpeningSound() {
+      if (!this.enabled || !this.context) return;
+      const now = this.context.currentTime;
+      const master = this.context.createGain();
+      master.gain.setValueAtTime(0.0001, now);
+      master.gain.exponentialRampToValueAtTime(0.22, now + 0.08);
+      master.gain.exponentialRampToValueAtTime(0.0001, now + 2.35);
+      master.connect(this.context.destination);
+
+      [
+        { frequency: 110, start: 0, duration: 2.2, type: "sine", volume: 0.46 },
+        { frequency: 220, start: 0.08, duration: 1.7, type: "triangle", volume: 0.18 },
+        { frequency: 329.63, start: 0.42, duration: 0.9, type: "sine", volume: 0.22 },
+        { frequency: 440, start: 0.88, duration: 0.95, type: "sine", volume: 0.18 },
+        { frequency: 659.25, start: 1.28, duration: 0.85, type: "sine", volume: 0.14 }
+      ].forEach((tone) => {
+        const oscillator = this.context.createOscillator();
+        const gain = this.context.createGain();
+        const start = now + tone.start;
+        const end = start + tone.duration;
+        oscillator.type = tone.type;
+        oscillator.frequency.setValueAtTime(tone.frequency, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(tone.volume, start + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.0001, end);
+        oscillator.connect(gain);
+        gain.connect(master);
+        oscillator.start(start);
+        oscillator.stop(end + 0.05);
+      });
+    }
+
+    speakOpening() {
+      if (!this.enabled || !this.supportsSpeech()) return false;
+      const utterance = new SpeechSynthesisUtterance(this.startMessage);
+      utterance.lang = "zh-TW";
+      utterance.rate = 0.9;
+      utterance.pitch = 0.82;
+      utterance.volume = 0.95;
+      const voices = window.speechSynthesis.getVoices();
+      utterance.voice = voices.find((voice) => voice.lang === "zh-TW")
+        || voices.find((voice) => voice.lang.startsWith("zh"))
+        || null;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+      return true;
+    }
+
+    playOpening() {
+      if (!this.enabled) return false;
+      this.unlock().then(() => this.playOpeningSound());
+      window.setTimeout(() => this.speakOpening(), 520);
+      return true;
+    }
+  }
+
   class AvalonApp {
     constructor() {
       this.transport = new DomainRoomTransport();
       this.game = new AvalonGame(this.transport);
+      this.audio = new GameAudio();
       this.roomCode = "";
       this.playerName = "";
       this.isHost = false;
@@ -58,6 +147,8 @@
       this.lastPhaseKey = "";
       this.qr = null;
       this.toastTimer = null;
+      this.ceremonyTimer = null;
+      this.currentScreen = "";
       this.elements = {};
 
       this.cacheElements();
@@ -81,7 +172,9 @@
         "gameActionPanel", "roleSymbol", "roleName", "roleSummary", "goodScore",
         "evilScore", "roundHint", "openRoleButton", "revealRoleButton", "roleModal",
         "closeRoleModal", "understandRoleButton", "roleModalSymbol", "roleModalTitle",
-        "roleModalDescription", "roleKnowledge", "toast"
+        "roleModalDescription", "roleKnowledge", "replayVoiceButton", "soundToggle",
+        "soundToggleIcon", "soundToggleLabel", "gameStartOverlay", "startAudioStatus",
+        "toast"
       ];
       ids.forEach((id) => {
         this.elements[id] = document.getElementById(id);
@@ -89,8 +182,14 @@
     }
 
     bindEvents() {
-      this.elements.createRoomButton.addEventListener("click", () => this.createRoom());
-      this.elements.joinRoomButton.addEventListener("click", () => this.joinRoom());
+      this.elements.createRoomButton.addEventListener("click", () => {
+        this.audio.unlock();
+        this.createRoom();
+      });
+      this.elements.joinRoomButton.addEventListener("click", () => {
+        this.audio.unlock();
+        this.joinRoom();
+      });
       this.elements.roomCodeInput.addEventListener("input", (event) => {
         event.target.value = this.normalizeRoomCode(event.target.value);
       });
@@ -107,7 +206,27 @@
       this.elements.copyInviteButton.addEventListener("click", () => this.copyInvite());
       this.elements.shareInviteButton.addEventListener("click", () => this.shareInvite());
       this.elements.showQrButton.addEventListener("click", () => this.toggleQr());
-      this.elements.startGameButton.addEventListener("click", () => this.game.startGame());
+      this.elements.startGameButton.addEventListener("click", () => {
+        this.audio.unlock();
+        this.game.startGame();
+      });
+      this.elements.soundToggle.addEventListener("click", () => {
+        this.audio.setEnabled(!this.audio.enabled);
+        this.renderAudioControl();
+        this.toast(this.audio.enabled ? "音效與語音已開啟" : "音效與語音已關閉");
+      });
+      this.elements.replayVoiceButton.addEventListener("click", () => {
+        if (!this.audio.supportsSpeech()) {
+          this.toast("此瀏覽器不支援系統語音");
+          return;
+        }
+        if (!this.audio.enabled) {
+          this.audio.setEnabled(true);
+          this.renderAudioControl();
+        }
+        this.audio.unlock();
+        this.audio.speakOpening();
+      });
       this.elements.chatForm.addEventListener("submit", (event) => {
         event.preventDefault();
         this.sendChat();
@@ -121,6 +240,7 @@
       this.elements.roleModal.addEventListener("click", (event) => {
         if (event.target === this.elements.roleModal) this.closeRoleModal();
       });
+      document.addEventListener("pointerdown", () => this.audio.unlock(), { once: true });
       window.addEventListener("beforeunload", () => this.transport.cleanup());
     }
 
@@ -163,7 +283,7 @@
       this.game.on("state", (state) => this.renderState(state));
       this.game.on("role", () => {
         this.renderRole();
-        this.openRoleModal();
+        this.runStartCeremony();
       });
       this.game.on("notice", (notice) => this.toast(notice.message || "系統訊息"));
       this.game.on("playerJoined", ({ playerName }) => {
@@ -186,6 +306,7 @@
       if (typeof Peer === "undefined") {
         this.showLobbyError("連線元件載入失敗，請確認網路後重新整理。");
       }
+      this.renderAudioControl();
     }
 
     validateName() {
@@ -253,6 +374,7 @@
     enterRoom() {
       this.setLobbyBusy(false);
       this.elements.roomCodeDisplay.textContent = this.roomCode;
+      this.elements.connectionLabel.dataset.mobileLabel = this.roomCode;
       this.elements.inviteLink.value = this.buildInviteUrl();
       this.elements.qrPanel.classList.add("hidden");
       this.elements.showQrButton.textContent = "顯示 QR";
@@ -263,16 +385,47 @@
     }
 
     leaveRoom() {
+      clearTimeout(this.ceremonyTimer);
+      this.elements.gameStartOverlay.classList.add("hidden");
       this.transport.cleanup();
       this.game.reset();
       this.isHost = false;
       this.roomCode = "";
+      this.elements.connectionLabel.dataset.mobileLabel = "未連線";
       this.draftSelection.clear();
       this.elements.chatMessages.innerHTML = "";
       this.elements.diagnosticLog.innerHTML = "";
       this.updateUrl("");
       this.showScreen("lobby");
       this.setLobbyBusy(false);
+    }
+
+    runStartCeremony() {
+      clearTimeout(this.ceremonyTimer);
+      this.closeRoleModal();
+      this.elements.startAudioStatus.textContent = this.audio.enabled
+        ? this.audio.supportsSpeech()
+          ? "正在播放開局音效與語音"
+          : "已播放開局音效；此瀏覽器不支援系統語音"
+        : "聲音已關閉，可從右上角開啟";
+      this.elements.gameStartOverlay.classList.remove("hidden");
+      this.audio.playOpening();
+      this.ceremonyTimer = window.setTimeout(() => {
+        this.elements.gameStartOverlay.classList.add("hidden");
+        this.openRoleModal();
+      }, this.audio.enabled ? 3100 : 1300);
+    }
+
+    renderAudioControl() {
+      const enabled = this.audio.enabled;
+      this.elements.soundToggle.setAttribute("aria-pressed", String(enabled));
+      this.elements.soundToggle.title = enabled ? "關閉音效與語音" : "開啟音效與語音";
+      this.elements.soundToggleIcon.textContent = enabled ? "音" : "靜";
+      this.elements.soundToggleLabel.textContent = enabled ? "聲音開啟" : "聲音關閉";
+      this.elements.replayVoiceButton.disabled = !this.audio.supportsSpeech();
+      this.elements.replayVoiceButton.textContent = this.audio.supportsSpeech()
+        ? "播放開局語音"
+        : "此瀏覽器不支援系統語音";
     }
 
     renderState(state) {
@@ -649,6 +802,13 @@
         connecting: "連線中",
         offline: "尚未連線"
       }[mapped];
+      this.elements.connectionLabel.dataset.mobileLabel = mapped === "online"
+        ? this.roomCode || "在線"
+        : {
+          error: "異常",
+          connecting: "連線中",
+          offline: "未連線"
+        }[mapped];
     }
 
     setLobbyBusy(busy) {
@@ -667,9 +827,12 @@
     }
 
     showScreen(name) {
+      const screenChanged = this.currentScreen !== name;
       this.elements.lobbyScreen.classList.toggle("hidden", name !== "lobby");
       this.elements.roomScreen.classList.toggle("hidden", name !== "room");
       this.elements.gameScreen.classList.toggle("hidden", name !== "game");
+      this.currentScreen = name;
+      if (screenChanged) window.scrollTo(0, 0);
     }
 
     log(message, type = "") {

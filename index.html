@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#111827">
   <meta name="description" content="以房號與邀請網址連線的阿瓦隆多人遊戲。">
   <title>阿瓦隆｜Axiospan 遊戲廳</title>
-  <link rel="stylesheet" href="style.css?v=2.0.0">
+  <link rel="stylesheet" href="style.css?v=2.2.0">
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -20,9 +20,15 @@
         <small>Axiospan 遊戲廳</small>
       </span>
     </a>
-    <div class="connection-pill" id="connectionPill" data-state="offline">
-      <span class="connection-dot"></span>
-      <span id="connectionLabel">尚未連線</span>
+    <div class="header-actions">
+      <button class="sound-toggle" id="soundToggle" type="button" aria-pressed="true" title="關閉音效與語音">
+        <span class="sound-toggle-icon" id="soundToggleIcon" aria-hidden="true">音</span>
+        <span id="soundToggleLabel">聲音開啟</span>
+      </button>
+      <div class="connection-pill" id="connectionPill" data-state="offline">
+        <span class="connection-dot"></span>
+        <span id="connectionLabel">尚未連線</span>
+      </div>
     </div>
   </header>
 
@@ -195,16 +201,27 @@
       <h2 id="roleModalTitle">你的身分</h2>
       <p id="roleModalDescription"></p>
       <div class="knowledge-box hidden" id="roleKnowledge"></div>
+      <button class="voice-replay-button" id="replayVoiceButton" type="button">播放開局語音</button>
       <button class="primary-button full-width" id="understandRoleButton">我記住了</button>
     </div>
+  </div>
+
+  <div class="start-ceremony hidden" id="gameStartOverlay" aria-live="assertive">
+    <div class="start-ceremony-ring">
+      <span>A</span>
+    </div>
+    <span class="eyebrow">The resistance begins</span>
+    <h2>遊戲開始</h2>
+    <p>請確認你的身分，並對其他玩家保守秘密。</p>
+    <span class="start-audio-status" id="startAudioStatus">正在播放開局語音</span>
   </div>
 
   <div class="toast hidden" id="toast" role="status"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script src="transport.js?v=2.0.0"></script>
-  <script src="game.js?v=2.0.0"></script>
-  <script src="app.js?v=2.0.0"></script>
+  <script src="transport.js?v=2.2.0"></script>
+  <script src="game.js?v=2.2.0"></script>
+  <script src="app.js?v=2.2.0"></script>
 </body>
 </html>
