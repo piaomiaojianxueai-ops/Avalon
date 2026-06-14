@@ -1,181 +1,335 @@
-// ==================== 資料傳輸層 (Transport Layer) ====================
-// 版本: 1.0.38
-// 最後更新: 2024-12-19
+(function (global) {
+  "use strict";
 
-class TransportLayer {
+  const ROOM_PREFIX = "axiospan-avalon-v2-";
+  const PROTOCOL_VERSION = 2;
+
+  class DomainRoomTransport {
     constructor() {
-        this.peers = new Map();
-        this.messageHandlers = new Map();
-        this.isHost = false;
-        this.playerId = this.generatePlayerId();
-        this.onConnectCallback = null;
-        this.onDisconnectCallback = null;
+      this.peer = null;
+      this.connections = new Map();
+      this.handlers = new Map();
+      this.statusHandlers = new Set();
+      this.connectHandlers = new Set();
+      this.disconnectHandlers = new Set();
+      this.isHost = false;
+      this.roomCode = "";
+      this.playerId = this.loadPlayerId();
+      this.playerName = "";
+      this.status = "offline";
     }
 
-    generatePlayerId() {
-        return 'player_' + Math.random().toString(36).substr(2, 9);
+    loadPlayerId() {
+      const key = "avalon-player-id";
+      let id = sessionStorage.getItem(key);
+      if (!id) {
+        id = `player_${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`;
+        sessionStorage.setItem(key, id);
+      }
+      return id;
     }
 
-    // 註冊訊息處理器
+    setIdentity(name) {
+      this.playerName = String(name || "").trim().slice(0, 16);
+    }
+
     onMessage(type, handler) {
-        this.messageHandlers.set(type, handler);
+      if (!this.handlers.has(type)) this.handlers.set(type, new Set());
+      this.handlers.get(type).add(handler);
+      return () => this.handlers.get(type)?.delete(handler);
     }
 
-    // 註冊連接回調
-    onConnect(callback) {
-        this.onConnectCallback = callback;
+    onStatus(handler) {
+      this.statusHandlers.add(handler);
+      return () => this.statusHandlers.delete(handler);
     }
 
-    // 註冊斷線回調
-    onDisconnect(callback) {
-        this.onDisconnectCallback = callback;
+    onConnect(handler) {
+      this.connectHandlers.add(handler);
+      return () => this.connectHandlers.delete(handler);
     }
 
-    // 發送訊息
-    send(message) {
-        const messageStr = JSON.stringify(message);
-        this.peers.forEach(peerInfo => {
-            if (peerInfo.connected) {
-                peerInfo.peer.send(messageStr);
-            }
-        });
+    onDisconnect(handler) {
+      this.disconnectHandlers.add(handler);
+      return () => this.disconnectHandlers.delete(handler);
     }
 
-    // 處理接收到的訊息
-    handleMessage(data) {
+    emitStatus(status, detail = "") {
+      this.status = status;
+      this.statusHandlers.forEach((handler) => handler({ status, detail }));
+    }
+
+    dispatch(message, context = {}) {
+      if (!message || typeof message !== "object" || !message.type) return;
+      const handlers = this.handlers.get(message.type);
+      if (!handlers) return;
+      handlers.forEach((handler) => {
         try {
-            let message;
-            
-            // 檢查數據類型
-            if (typeof data === 'string') {
-                // 如果是字符串，嘗試解析JSON
-                message = JSON.parse(data);
-            } else if (data instanceof Uint8Array) {
-                // 如果是Uint8Array，轉換為字符串再解析
-                const dataString = new TextDecoder().decode(data);
-                message = JSON.parse(dataString);
-            } else if (typeof data === 'object' && data !== null) {
-                // 如果已經是對象，直接使用
-                message = data;
-            } else {
-                console.error('無效的訊息數據類型:', typeof data);
-                return;
-            }
-            
-            // 檢查訊息格式
-            if (!message || typeof message !== 'object') {
-                console.error('無效的訊息格式:', message);
-                return;
-            }
-            
-            if (!message.type) {
-                console.error('訊息缺少type屬性:', message);
-                return;
-            }
-            
-            const handler = this.messageHandlers.get(message.type);
-            if (handler) {
-                handler(message);
-            } else {
-                console.warn('未找到訊息處理器:', message.type);
-            }
+          handler(message, context);
         } catch (error) {
-            console.error('訊息解析錯誤:', error);
-            console.error('原始數據:', data);
+          console.error(`Avalon handler failed for ${message.type}`, error);
         }
+      });
     }
 
-    // 添加對等連接
-    addPeer(peer) {
-        const peerId = peer.id || this.generatePlayerId();
-        peer.id = peerId;
-        
-        // 使用自定義的連接狀態追蹤
-        const peerInfo = {
-            peer: peer,
-            connected: false,
-            id: peerId
-        };
-        
-        this.peers.set(peerId, peerInfo);
+    parseMessage(raw) {
+      if (typeof raw === "string") return JSON.parse(raw);
+      if (raw instanceof ArrayBuffer) return JSON.parse(new TextDecoder().decode(raw));
+      if (ArrayBuffer.isView(raw)) return JSON.parse(new TextDecoder().decode(raw));
+      return raw;
+    }
 
-        peer.on('data', (data) => {
-            this.handleMessage(data);
+    handleIncoming(raw, connection) {
+      try {
+        const message = this.parseMessage(raw);
+        this.dispatch(message, {
+          remotePlayerId: connection.metadata?.playerId || connection.peer,
+          connection
+        });
+      } catch (error) {
+        console.error("Unable to parse Avalon network message", error);
+      }
+    }
+
+    async hostRoom(code, name) {
+      this.cleanup();
+      this.setIdentity(name);
+      this.isHost = true;
+      this.roomCode = this.normalizeCode(code);
+      this.emitStatus("connecting", "正在建立房間");
+
+      return new Promise((resolve, reject) => {
+        this.peer = new Peer(ROOM_PREFIX + this.roomCode);
+
+        this.peer.on("open", () => {
+          this.emitStatus("online", `房間 ${this.roomCode} 已建立`);
+          resolve(this.roomCode);
         });
 
-        peer.on('connect', () => {
-            peerInfo.connected = true;
-            console.log('玩家連接成功:', peerId);
-            if (this.onConnectCallback) {
-                this.onConnectCallback(peerId);
+        this.peer.on("connection", (connection) => {
+          const metadata = connection.metadata || {};
+          if (metadata.protocolVersion !== PROTOCOL_VERSION || !metadata.playerId) {
+            connection.close();
+            return;
+          }
+          this.wireConnection(connection, metadata.playerId, metadata.playerName);
+        });
+
+        this.peer.on("error", (error) => {
+          const message = error.type === "unavailable-id"
+            ? "房號剛好被使用，請重新建立"
+            : `建立房間失敗：${this.describePeerError(error.type)}`;
+          this.emitStatus("error", message);
+          reject(new Error(message));
+        });
+
+        this.peer.on("disconnected", () => {
+          this.emitStatus("connecting", "訊號服務暫時中斷，正在重連");
+          try {
+            this.peer.reconnect();
+          } catch (_) {}
+        });
+      });
+    }
+
+    async joinRoom(code, name) {
+      this.cleanup();
+      this.setIdentity(name);
+      this.isHost = false;
+      this.roomCode = this.normalizeCode(code);
+      this.emitStatus("connecting", `正在加入 ${this.roomCode}`);
+
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          const message = "找不到房間，請確認房號或請房主重新建立";
+          this.emitStatus("error", message);
+          this.cleanup();
+          reject(new Error(message));
+        }, 10000);
+
+        this.peer = new Peer();
+        this.peer.on("open", () => {
+          const connection = this.peer.connect(ROOM_PREFIX + this.roomCode, {
+            reliable: true,
+            metadata: {
+              protocolVersion: PROTOCOL_VERSION,
+              playerId: this.playerId,
+              playerName: this.playerName
             }
+          });
+          this.wireConnection(connection, "host", "房主", () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            this.emitStatus("online", `已加入房間 ${this.roomCode}`);
+            resolve(this.roomCode);
+          });
         });
 
-        peer.on('close', () => {
-            peerInfo.connected = false;
-            console.log('玩家斷線:', peerId);
-            if (this.onDisconnectCallback) {
-                this.onDisconnectCallback(peerId);
-            }
+        this.peer.on("error", (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          const message = `加入失敗：${this.describePeerError(error.type)}`;
+          this.emitStatus("error", message);
+          reject(new Error(message));
         });
 
-        peer.on('error', (err) => {
-            console.error('Peer錯誤:', peerId, err);
-            peerInfo.connected = false;
+        this.peer.on("disconnected", () => {
+          this.emitStatus("connecting", "訊號服務暫時中斷，現有對戰仍可繼續");
         });
+      });
     }
 
-    // 獲取連接的玩家數量
-    getConnectedPlayerCount() {
-        return Array.from(this.peers.values()).filter(peerInfo => peerInfo.connected).length;
+    wireConnection(connection, remotePlayerId, remotePlayerName, onOpen) {
+      const info = {
+        connection,
+        playerId: remotePlayerId,
+        playerName: remotePlayerName || `玩家${String(remotePlayerId).slice(-4)}`,
+        open: false
+      };
+      this.connections.set(remotePlayerId, info);
+
+      connection.on("open", () => {
+        info.open = true;
+        this.connectHandlers.forEach((handler) => handler({
+          playerId: remotePlayerId,
+          playerName: info.playerName
+        }));
+
+        if (this.isHost) {
+          this.dispatch({
+            type: "player_joined",
+            playerId: remotePlayerId,
+            playerName: info.playerName
+          }, { connection, remotePlayerId });
+        }
+
+        if (onOpen) onOpen();
+      });
+
+      connection.on("data", (data) => this.handleIncoming(data, connection));
+
+      connection.on("close", () => {
+        info.open = false;
+        this.connections.delete(remotePlayerId);
+        this.disconnectHandlers.forEach((handler) => handler({
+          playerId: remotePlayerId,
+          playerName: info.playerName
+        }));
+      });
+
+      connection.on("error", (error) => {
+        console.error("Avalon data connection error", error);
+      });
     }
 
-    // 獲取所有玩家ID
-    getPlayerIds() {
-        return Array.from(this.peers.keys());
+    normalizeCode(code) {
+      return String(code || "").toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 6);
     }
 
-    // 檢查是否為房主
-    isHostPlayer() {
-        return this.isHost;
+    serialize(message) {
+      return JSON.stringify({
+        ...message,
+        sentAt: Date.now()
+      });
     }
 
-    // 獲取當前玩家ID
-    getCurrentPlayerId() {
-        return this.playerId;
+    send(message) {
+      if (this.isHost) {
+        this.broadcast(message);
+        return;
+      }
+      const host = this.connections.get("host");
+      if (host?.open) host.connection.send(this.serialize(message));
     }
 
-    // 設置房主狀態
-    setHostStatus(isHost) {
-        this.isHost = isHost;
-    }
-
-    // 廣播訊息給所有玩家
-    broadcast(message) {
+    broadcast(message, options = {}) {
+      if (!this.isHost) {
         this.send(message);
-    }
-
-    // 發送訊息給特定玩家
-    sendToPlayer(playerId, message) {
-        const peerInfo = this.peers.get(playerId);
-        if (peerInfo && peerInfo.connected) {
-            const messageStr = JSON.stringify(message);
-            peerInfo.peer.send(messageStr);
+        return;
+      }
+      const payload = this.serialize(message);
+      this.connections.forEach((info, playerId) => {
+        if (info.open && playerId !== options.excludePlayerId) {
+          info.connection.send(payload);
         }
+      });
     }
 
-    // 清理所有連接
+    sendToPlayer(playerId, message) {
+      if (playerId === this.playerId) {
+        queueMicrotask(() => this.dispatch(message, { local: true }));
+        return true;
+      }
+
+      if (!this.isHost) {
+        this.send({ ...message, targetPlayerId: playerId });
+        return false;
+      }
+
+      const info = this.connections.get(playerId);
+      if (!info?.open) return false;
+      info.connection.send(this.serialize(message));
+      return true;
+    }
+
+    getConnectedPlayerCount() {
+      return Array.from(this.connections.values()).filter((info) => info.open).length;
+    }
+
+    getPlayerIds() {
+      return Array.from(this.connections.keys());
+    }
+
+    isHostPlayer() {
+      return this.isHost;
+    }
+
+    getCurrentPlayerId() {
+      return this.playerId;
+    }
+
+    getRoomCode() {
+      return this.roomCode;
+    }
+
+    describePeerError(type) {
+      const errors = {
+        "peer-unavailable": "房間不存在或房主已離線",
+        "network": "網路或訊號服務無法連線",
+        "server-error": "訊號服務暫時異常",
+        "socket-error": "無法連接訊號服務",
+        "socket-closed": "訊號連線已關閉",
+        "browser-incompatible": "此瀏覽器不支援 WebRTC",
+        "webrtc": "裝置間的 P2P 連線失敗"
+      };
+      return errors[type] || type || "未知錯誤";
+    }
+
     cleanup() {
-        this.peers.forEach(peerInfo => {
-            if (peerInfo.peer.destroy) {
-                peerInfo.peer.destroy();
-            }
-        });
-        this.peers.clear();
-    }
-}
+      this.connections.forEach((info) => {
+        try {
+          info.connection.close();
+        } catch (_) {}
+      });
+      this.connections.clear();
 
-// 導出傳輸層類別
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = TransportLayer;
-} 
+      if (this.peer) {
+        try {
+          this.peer.destroy();
+        } catch (_) {}
+      }
+
+      this.peer = null;
+      this.isHost = false;
+      this.roomCode = "";
+      this.emitStatus("offline", "尚未連線");
+    }
+  }
+
+  global.DomainRoomTransport = DomainRoomTransport;
+})(window);

@@ -1,194 +1,210 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-Hant">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>阿瓦隆 - 手機版</title>
-    <link rel="stylesheet" href="style.css?v=1.0.39">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <meta name="description" content="以房號與邀請網址連線的阿瓦隆多人遊戲。">
+  <title>阿瓦隆｜Axiospan 遊戲廳</title>
+  <link rel="stylesheet" href="style.css?v=2.0.0">
 </head>
 <body>
-    <div class="container">
-        <h1>🏰 阿瓦隆 - v1.0.39</h1>
-        
-        <!-- 主選單 -->
-        <div id="mainMenu">
-            <div class="button-group">
-                <button class="btn" id="btnHost">🏠 創建房間</button>
-                <button class="btn btn-secondary" id="btnJoin">🔗 加入房間</button>
-            </div>
-        </div>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
 
-        <!-- QR碼區域 -->
-        <div id="qrContainer" class="qr-container hidden">
-            <h3 id="qrTitle">掃描此QR碼加入遊戲</h3>
-            <br>
-            <br>
-            <div id="qr"></div>
-            <div id="qrText" class="qr-text"></div>
-            <div style="margin-top: 20px;">
-                <button id="btnBackToRoom" class="btn btn-secondary" style="margin-right: 10px;">← 返回房間</button>
-                <button id="btnScan" class="btn" style="display: none;">📷 掃描</button>
-            </div>
-        </div>
-
-        <!-- 掃描區域 -->
-        <div id="scanContainer" class="scan-container hidden">
-            <h3>掃描房主的QR碼</h3>
-            <div class="status" id="scanStatus">準備掃描...</div>
-            <div id="scanError" style="display: none;"></div>
-            <div id="scanResult"></div>
-            <div class="camera-preview">
-                <video id="scan"></video>
-                <div class="scan-overlay">
-                    <div class="scan-frame"></div>
-                    <div class="scan-indicator" id="scanIndicator"></div>
-                </div>
-            </div>
-            <div class="scan-feedback">
-                <div class="feedback-text" id="feedbackText">請將QR碼對準綠色框框內</div>
-                <div class="scan-progress" id="scanProgress"></div>
-            </div>
-            <div style="margin: 20px 0;">
-                <input id="manualQrInput" type="text" placeholder="可貼上QR碼內容" style="width: 80%; padding: 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 1rem;margin-bottom: 10px;">
-                <button id="btnManualJoin" class="btn btn-secondary" style="margin-left: 8px;">手動加入</button>
-            </div>
-            <button id="retryScan" class="btn" style="margin-top: 10px; display: none;">重新掃描</button>
-            <button id="btnBackToQR" class="btn btn-secondary" style="margin-top: 10px; display: none;">返回QR碼</button>
-        </div>
-
-        <!-- 房間區域 -->
-        <div id="roomArea" class="room-area hidden">
-            <div class="room-header">
-                <h2>🏰 遊戲房間</h2>
-                <div id="roomStatus" class="room-status">等待玩家加入...</div>
-            </div>
-            
-            <!-- 房主專用按鈕 -->
-            <div id="hostControls" class="host-controls hidden">
-                <button id="btnAddPlayer" class="btn btn-secondary">👥 加入玩家</button>
-                <button id="btnStartGame" class="btn">🎮 開始遊戲</button>
-            </div>
-            
-            <!-- 玩家列表 -->
-            <div class="room-players">
-                <h3>房間成員</h3>
-                <div id="roomPlayerList" class="room-player-list"></div>
-            </div>
-            
-            <!-- 房間聊天區域 -->
-            <div class="chat-area">
-                <div class="chat-header">
-                    <h3>💬 房間聊天</h3>
-                </div>
-                <div id="chatMessages" class="chat-messages"></div>
-                <div class="chat-input-area">
-                    <input type="text" id="roomChatInput" placeholder="輸入訊息..." maxlength="100">
-                    <button id="btnSendMessage">發送</button>
-                </div>
-            </div>
-
-            <!-- 連接日誌區域 -->
-            <div class="connection-log-area">
-                <div class="log-header">
-                    <h3>📋 連接日誌</h3>
-                    <button id="clearLogBtn" class="clear-log-btn">清空</button>
-                </div>
-                <div id="connectionLog" class="connection-log"></div>
-            </div>
-        </div>
-
-        <!-- 遊戲區域 -->
-        <div id="gameArea" class="game-area hidden">
-            <div id="status" class="status">等待玩家加入...</div>
-            
-            <div id="playerList" class="player-list"></div>
-            
-            <div id="roleCard" class="role-card hidden">
-                <div class="role-name" id="roleName"></div>
-                <div class="role-description" id="roleDescription"></div>
-            </div>
-
-            <div id="missionProgress" class="mission-progress hidden">
-                <h3>任務進度</h3>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="progressFill"></div>
-                </div>
-                <div id="missionInfo"></div>
-            </div>
-
-            <div id="voteButtons" class="vote-buttons hidden">
-                <button class="vote-btn vote-success" id="btnVoteSuccess">✅ 成功</button>
-                <button class="vote-btn vote-fail" id="btnVoteFail">❌ 失敗</button>
-            </div>
-
-            <div id="chatArea" class="chat-area">
-                <h3>遊戲訊息</h3>
-                <div id="chatMessages"></div>
-            </div>
-        </div>
-
-        <!-- 遊戲操作區域 -->
-        <div id="gameOperationArea" class="game-operation-area hidden">
-            <div class="game-header">
-                <h2>🎯 遊戲進行中</h2>
-                <div id="gamePhase" class="game-phase">組隊階段</div>
-            </div>
-            
-            <!-- 玩家頭像區域 -->
-            <div class="player-avatars">
-                <div class="left-players" id="leftPlayers"></div>
-                <div class="center-game" id="centerGame">
-                    <div class="game-message" id="gameMessage">
-                        <h3>當前階段</h3>
-                        <p id="currentPhaseText">請選擇任務成員</p>
-                    </div>
-                    <div class="game-actions" id="gameActions"></div>
-                </div>
-                <div class="right-players" id="rightPlayers"></div>
-            </div>
-            
-            <!-- 底部按鈕 -->
-            <div class="game-bottom">
-                <button id="btnViewGame" class="btn btn-secondary">📊 查看遊戲</button>
-            </div>
-        </div>
-
-        <!-- 遊戲查看區域 -->
-        <div id="gameViewArea" class="game-view-area hidden">
-            <div class="view-header">
-                <h2>📊 遊戲統計</h2>
-                <button id="btnBackToGame" class="btn btn-secondary">← 返回遊戲</button>
-            </div>
-            
-            <!-- 遊戲統計表格 -->
-            <div class="game-stats">
-                <div class="stats-section">
-                    <h3>任務進度</h3>
-                    <div id="missionStats" class="stats-table"></div>
-                </div>
-                
-                <div class="stats-section">
-                    <h3>投票記錄</h3>
-                    <div id="voteStats" class="stats-table"></div>
-                </div>
-                
-                <div class="stats-section">
-                    <h3>玩家狀態</h3>
-                    <div id="playerStats" class="stats-table"></div>
-                </div>
-            </div>
-        </div>
+  <header class="site-header">
+    <a class="brand" href="https://game.axiospan.com/" aria-label="回到 Axiospan 遊戲廳">
+      <span class="brand-mark">A</span>
+      <span>
+        <strong>AVALON</strong>
+        <small>Axiospan 遊戲廳</small>
+      </span>
+    </a>
+    <div class="connection-pill" id="connectionPill" data-state="offline">
+      <span class="connection-dot"></span>
+      <span id="connectionLabel">尚未連線</span>
     </div>
+  </header>
 
-    <!-- 外部庫 -->
-    <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+  <main class="shell">
+    <section class="screen screen-lobby" id="lobbyScreen">
+      <div class="hero-copy">
+        <div class="eyebrow">5–10 人 · 即時 P2P 連線</div>
+        <h1>忠誠藏於誓言，<br><span>背叛潛伏圓桌。</span></h1>
+        <p>建立一組房號，把邀請網址傳給朋友。免安裝、免掃描交換資料，手機開啟連結即可加入。</p>
+        <div class="feature-row">
+          <span>網址邀請</span>
+          <span>秘密角色</span>
+          <span>即時同步</span>
+        </div>
+      </div>
 
-    <!-- 遊戲腳本 -->
-    <script src="app.js?v=1.0.39"></script>
-    <script src="game.js?v=1.0.38"></script>
-    <script src="transport.js?v=1.0.38"></script>
+      <div class="lobby-card glass-card">
+        <div class="card-heading">
+          <span class="step-number">01</span>
+          <div>
+            <h2>選擇你的名字</h2>
+            <p>同一台裝置會記住名稱。</p>
+          </div>
+        </div>
+        <label class="field-label" for="playerName">玩家名稱</label>
+        <input class="text-field" id="playerName" maxlength="16" autocomplete="nickname" placeholder="例如：梅林的學徒">
+
+        <div class="lobby-actions">
+          <button class="primary-button" id="createRoomButton">
+            <span class="button-icon">＋</span>
+            建立新房間
+          </button>
+          <div class="divider"><span>或</span></div>
+          <div class="join-row">
+            <input class="room-input" id="roomCodeInput" maxlength="6" inputmode="text" autocomplete="off" placeholder="輸入 6 碼房號">
+            <button class="secondary-button" id="joinRoomButton">加入房間</button>
+          </div>
+        </div>
+
+        <div class="invite-hint hidden" id="inviteHint">
+          <strong>你收到房間邀請</strong>
+          <span id="inviteRoomCode"></span>
+        </div>
+
+        <div class="error-banner hidden" id="lobbyError" role="alert"></div>
+      </div>
+    </section>
+
+    <section class="screen hidden" id="roomScreen">
+      <div class="room-topbar">
+        <div>
+          <div class="eyebrow">等待冒險者集結</div>
+          <h1>圓桌大廳</h1>
+        </div>
+        <button class="ghost-button" id="leaveRoomButton">離開房間</button>
+      </div>
+
+      <div class="room-grid">
+        <section class="glass-card invite-card">
+          <div class="card-heading compact">
+            <span class="step-number">02</span>
+            <div>
+              <h2>邀請玩家</h2>
+              <p>分享網址或房號，玩家會直接連到這個房間。</p>
+            </div>
+          </div>
+          <div class="room-code-block">
+            <span>房號</span>
+            <strong id="roomCodeDisplay">------</strong>
+          </div>
+          <div class="invite-link-row">
+            <input id="inviteLink" readonly aria-label="邀請網址">
+            <button class="icon-button" id="copyInviteButton" title="複製邀請網址">複製</button>
+          </div>
+          <div class="share-actions">
+            <button class="secondary-button" id="shareInviteButton">分享邀請</button>
+            <button class="ghost-button" id="showQrButton">顯示 QR</button>
+          </div>
+          <div class="qr-panel hidden" id="qrPanel">
+            <div id="inviteQr"></div>
+            <p>相機掃描後會直接開啟加入網址。</p>
+          </div>
+        </section>
+
+        <section class="glass-card players-card">
+          <div class="section-title-row">
+            <div>
+              <span class="eyebrow">圓桌成員</span>
+              <h2><span id="playerCount">1</span> / 10 人</h2>
+            </div>
+            <span class="minimum-badge" id="minimumBadge">還需 4 人</span>
+          </div>
+          <div class="player-list" id="roomPlayerList"></div>
+          <button class="primary-button full-width hidden" id="startGameButton">分配角色並開始</button>
+          <p class="host-note" id="hostNote">只有房主可以開始遊戲。</p>
+        </section>
+
+        <section class="glass-card chat-card">
+          <div class="section-title-row">
+            <div>
+              <span class="eyebrow">密談</span>
+              <h2>房間聊天</h2>
+            </div>
+          </div>
+          <div class="chat-messages" id="chatMessages" aria-live="polite"></div>
+          <form class="chat-form" id="chatForm">
+            <input id="chatInput" maxlength="120" autocomplete="off" placeholder="說點什麼…">
+            <button type="submit">送出</button>
+          </form>
+        </section>
+
+        <details class="glass-card diagnostics-card">
+          <summary>連線診斷</summary>
+          <div class="diagnostic-log" id="diagnosticLog"></div>
+        </details>
+      </div>
+    </section>
+
+    <section class="screen hidden" id="gameScreen">
+      <div class="game-topbar">
+        <div>
+          <div class="eyebrow" id="gamePhaseEyebrow">任務準備</div>
+          <h1 id="gamePhaseTitle">等待房主開始</h1>
+        </div>
+        <button class="ghost-button" id="openRoleButton">查看身分</button>
+      </div>
+
+      <div class="mission-track" id="missionTrack"></div>
+
+      <div class="game-layout">
+        <section class="glass-card council-card">
+          <div class="section-title-row">
+            <div>
+              <span class="eyebrow">圓桌議會</span>
+              <h2 id="councilTitle">選擇任務成員</h2>
+            </div>
+            <span class="minimum-badge" id="selectionCounter">0 / 0</span>
+          </div>
+          <div class="council-grid" id="councilGrid"></div>
+          <div class="game-action-panel" id="gameActionPanel"></div>
+        </section>
+
+        <aside class="game-sidebar">
+          <section class="glass-card role-summary-card">
+            <span class="eyebrow">你的身分</span>
+            <div class="role-symbol" id="roleSymbol">?</div>
+            <h2 id="roleName">尚未揭曉</h2>
+            <p id="roleSummary">遊戲開始後，身分只會顯示在你的裝置上。</p>
+            <button class="secondary-button full-width" id="revealRoleButton">查看完整提示</button>
+          </section>
+
+          <section class="glass-card score-card">
+            <span class="eyebrow">戰局</span>
+            <div class="score-row">
+              <div><strong id="goodScore">0</strong><span>成功</span></div>
+              <div><strong id="evilScore">0</strong><span>失敗</span></div>
+            </div>
+            <p id="roundHint">率先取得三次任務結果的一方掌握勝局。</p>
+          </section>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-backdrop hidden" id="roleModal" role="dialog" aria-modal="true" aria-labelledby="roleModalTitle">
+    <div class="role-modal glass-card">
+      <button class="modal-close" id="closeRoleModal" aria-label="關閉">×</button>
+      <span class="eyebrow">請勿讓其他玩家看到</span>
+      <div class="role-modal-symbol" id="roleModalSymbol">?</div>
+      <h2 id="roleModalTitle">你的身分</h2>
+      <p id="roleModalDescription"></p>
+      <div class="knowledge-box hidden" id="roleKnowledge"></div>
+      <button class="primary-button full-width" id="understandRoleButton">我記住了</button>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast" role="status"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="transport.js?v=2.0.0"></script>
+  <script src="game.js?v=2.0.0"></script>
+  <script src="app.js?v=2.0.0"></script>
 </body>
-</html> 
+</html>

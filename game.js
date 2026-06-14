@@ -1,536 +1,465 @@
-// ==================== 遊戲邏輯層 (Game Logic) ====================
-// 版本: 1.0.38
-// 最後更新: 2024-12-19
+(function (global) {
+  "use strict";
 
-class AvalonGame {
+  const PHASES = Object.freeze({
+    WAITING: "WAITING",
+    TEAM_SELECTION: "TEAM_SELECTION",
+    MISSION_VOTE: "MISSION_VOTE",
+    ASSASSINATION: "ASSASSINATION",
+    GAME_END: "GAME_END"
+  });
+
+  const ROLE_CONFIG = {
+    5: ["Merlin", "Percival", "Loyal Servant", "Morgana", "Assassin"],
+    6: ["Merlin", "Percival", "Loyal Servant", "Loyal Servant", "Morgana", "Assassin"],
+    7: ["Merlin", "Percival", "Loyal Servant", "Loyal Servant", "Morgana", "Oberon", "Assassin"],
+    8: ["Merlin", "Percival", "Loyal Servant", "Loyal Servant", "Loyal Servant", "Morgana", "Mordred", "Assassin"],
+    9: ["Merlin", "Percival", "Loyal Servant", "Loyal Servant", "Loyal Servant", "Loyal Servant", "Morgana", "Mordred", "Assassin"],
+    10: ["Merlin", "Percival", "Loyal Servant", "Loyal Servant", "Loyal Servant", "Loyal Servant", "Morgana", "Mordred", "Oberon", "Assassin"]
+  };
+
+  const MISSION_SIZES = {
+    5: [2, 3, 2, 3, 3],
+    6: [2, 3, 4, 3, 4],
+    7: [2, 3, 3, 4, 4],
+    8: [3, 4, 4, 5, 5],
+    9: [3, 4, 4, 5, 5],
+    10: [3, 4, 4, 5, 5]
+  };
+
+  const GOOD_ROLES = new Set(["Merlin", "Percival", "Loyal Servant"]);
+
+  class AvalonGame {
     constructor(transport) {
-        this.transport = transport;
-        this.gameState = 'WAITING_FOR_PLAYERS';
-        this.players = [];
-        this.roles = [];
-        this.currentMission = 0;
-        this.missionResults = [];
-        this.currentLeader = 0;
-        this.selectedMembers = [];
-        this.votes = [];
-        this.gameCallbacks = new Map();
-        
-        // 如果是房主，將自己添加到玩家列表
+      this.transport = transport;
+      this.listeners = new Map();
+      this.roles = [];
+      this.myRole = null;
+      this.state = this.createInitialState();
+      this.registerTransportHandlers();
+    }
+
+    createInitialState() {
+      return {
+        phase: PHASES.WAITING,
+        players: [],
+        currentMission: 0,
+        currentLeaderId: null,
+        selectedMembers: [],
+        submittedVoteIds: [],
+        missionResults: [],
+        revealedRoles: [],
+        winner: null,
+        message: "等待玩家加入"
+      };
+    }
+
+    on(event, handler) {
+      if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+      this.listeners.get(event).add(handler);
+      return () => this.listeners.get(event)?.delete(handler);
+    }
+
+    emit(event, payload) {
+      this.listeners.get(event)?.forEach((handler) => handler(payload));
+    }
+
+    registerTransportHandlers() {
+      this.transport.onMessage("player_joined", (message) => {
+        if (this.transport.isHostPlayer()) this.addPlayer(message.playerId, message.playerName);
+      });
+
+      this.transport.onMessage("player_action", (message) => {
         if (this.transport.isHostPlayer()) {
-            const hostPlayer = {
-                id: this.transport.getCurrentPlayerId(),
-                name: '房主',
-                ready: true
-            };
-            this.players.push(hostPlayer);
-            console.log('房主已添加到玩家列表:', hostPlayer);
+          this.handleAction(message.playerId, message.action, message.payload || {});
         }
-        
-        this.setupMessageHandlers();
-    }
+      });
 
-    // 註冊遊戲事件回調
-    onGameEvent(event, callback) {
-        this.gameCallbacks.set(event, callback);
-    }
-
-    // 觸發遊戲事件
-    triggerGameEvent(event, data) {
-        const callback = this.gameCallbacks.get(event);
-        if (callback) {
-            callback(data);
+      this.transport.onMessage("state_snapshot", (message) => {
+        if (!this.transport.isHostPlayer()) {
+          this.state = this.sanitizeSnapshot(message.state);
+          this.emit("state", this.getState());
         }
-    }
+      });
 
-    setupMessageHandlers() {
-        this.transport.onMessage('player_join', (msg) => this.handlePlayerJoin(msg));
-        this.transport.onMessage('role_assignment', (msg) => this.handleRoleAssignment(msg));
-        this.transport.onMessage('mission_vote', (msg) => this.handleMissionVote(msg));
-        this.transport.onMessage('game_action', (msg) => this.handleGameAction(msg));
-        this.transport.onMessage('player_ready', (msg) => this.handlePlayerReady(msg));
-        this.transport.onMessage('room_message', (msg) => this.handleRoomMessage(msg));
-    }
-
-    // 角色配置
-    getRoleConfig(playerCount) {
-        const configs = {
-            5: { good: 3, evil: 2, roles: ['Merlin', 'Percival', 'Loyal Servant', 'Morgana', 'Assassin'] },
-            6: { good: 4, evil: 2, roles: ['Merlin', 'Percival', 'Loyal Servant', 'Loyal Servant', 'Morgana', 'Assassin'] },
-            7: { good: 4, evil: 3, roles: ['Merlin', 'Percival', 'Loyal Servant', 'Loyal Servant', 'Morgana', 'Oberon', 'Assassin'] },
-            8: { good: 5, evil: 3, roles: ['Merlin', 'Percival', 'Loyal Servant', 'Loyal Servant', 'Loyal Servant', 'Morgana', 'Mordred', 'Assassin'] },
-            9: { good: 6, evil: 3, roles: ['Merlin', 'Percival', 'Loyal Servant', 'Loyal Servant', 'Loyal Servant', 'Loyal Servant', 'Morgana', 'Mordred', 'Assassin'] },
-            10: { good: 6, evil: 4, roles: ['Merlin', 'Percival', 'Loyal Servant', 'Loyal Servant', 'Loyal Servant', 'Loyal Servant', 'Morgana', 'Mordred', 'Oberon', 'Assassin'] }
+      this.transport.onMessage("private_role", (message) => {
+        this.myRole = {
+          role: message.role,
+          isGood: message.isGood,
+          knowledge: Array.isArray(message.knowledge) ? message.knowledge : []
         };
-        return configs[playerCount] || configs[5];
+        this.emit("role", { ...this.myRole });
+      });
+
+      this.transport.onMessage("game_notice", (message) => {
+        this.emit("notice", message);
+      });
     }
 
-    // 任務成員數量
-    getMissionSize(missionNumber, playerCount) {
-        const sizes = {
-            5: [2, 3, 2, 3, 3],
-            6: [2, 3, 4, 3, 4],
-            7: [2, 3, 3, 4, 4],
-            8: [3, 4, 4, 5, 5],
-            9: [3, 4, 4, 5, 5],
-            10: [3, 4, 4, 5, 5]
-        };
-        return sizes[playerCount][missionNumber - 1] || 2;
+    configureHost(name) {
+      const host = {
+        id: this.transport.getCurrentPlayerId(),
+        name: this.cleanName(name, "房主"),
+        online: true,
+        isHost: true
+      };
+      this.state = this.createInitialState();
+      this.state.players = [host];
+      this.roles = [];
+      this.myRole = null;
+      this.publishState("房間已建立");
     }
 
-    // 分配角色
-    assignRoles() {
-        // 確保房主也在玩家列表中
-        const allPlayers = [...this.players];
-        if (this.transport.isHostPlayer()) {
-            // 如果房主不在玩家列表中，添加房主
-            const hostPlayer = {
-                id: this.transport.getCurrentPlayerId(),
-                name: '房主',
-                ready: true
-            };
-            if (!allPlayers.find(p => p.id === hostPlayer.id)) {
-                allPlayers.unshift(hostPlayer); // 房主放在第一位
-            }
-        }
-        
-        // 檢查人數是否支援
-        const supportedPlayerCounts = [5, 6, 7, 8, 9, 10];
-        if (!supportedPlayerCounts.includes(allPlayers.length)) {
-            console.error(`不支援 ${allPlayers.length} 人遊戲，需要 5-10 人`);
-            this.transport.broadcast({
-                type: 'game_error',
-                message: `不支援 ${allPlayers.length} 人遊戲，需要 5-10 人`
-            });
-            return;
-        }
-        
-        const config = this.getRoleConfig(allPlayers.length);
-        const shuffledRoles = [...config.roles].sort(() => Math.random() - 0.5);
-        
-        this.roles = allPlayers.map((player, index) => ({
-            playerId: player.id,
-            role: shuffledRoles[index],
-            isGood: ['Merlin', 'Percival', 'Loyal Servant'].includes(shuffledRoles[index])
-        }));
+    configureGuest(name) {
+      this.state = this.createInitialState();
+      this.state.players = [{
+        id: this.transport.getCurrentPlayerId(),
+        name: this.cleanName(name, "玩家"),
+        online: true,
+        isHost: false
+      }];
+      this.roles = [];
+      this.myRole = null;
+      this.emit("state", this.getState());
+    }
 
-        // 發送角色給每個玩家
-        this.roles.forEach(role => {
-            this.transport.sendToPlayer(role.playerId, {
-                type: 'role_assignment',
-                playerId: role.playerId,
-                role: role.role,
-                isGood: role.isGood,
-                gameInfo: this.getGameInfo(role)
-            });
+    cleanName(name, fallback) {
+      const clean = String(name || "").trim().replace(/[<>]/g, "").slice(0, 16);
+      return clean || fallback;
+    }
+
+    addPlayer(playerId, playerName) {
+      if (this.state.phase !== PHASES.WAITING) {
+        this.transport.sendToPlayer(playerId, {
+          type: "game_notice",
+          level: "error",
+          message: "遊戲已開始，暫時無法加入"
         });
+        return;
+      }
 
-        this.gameState = 'GAME_START';
-        this.triggerGameEvent('rolesAssigned', { roles: this.roles });
-        this.startMission();
-    }
-
-    // 獲取遊戲資訊（根據角色）
-    getGameInfo(playerRole) {
-        const info = {
-            evilPlayers: [],
-            merlinInfo: null,
-            percivalInfo: null
-        };
-
-        if (playerRole.role === 'Merlin') {
-            // 梅林知道所有壞人（除了莫德雷德）
-            info.evilPlayers = this.roles
-                .filter(r => !r.isGood && r.role !== 'Mordred')
-                .map(r => r.playerId);
-        } else if (playerRole.role === 'Percival') {
-            // 派西維爾知道梅林和莫甘娜
-            const merlin = this.roles.find(r => r.role === 'Merlin');
-            const morgana = this.roles.find(r => r.role === 'Morgana');
-            info.percivalInfo = [merlin?.playerId, morgana?.playerId].filter(Boolean);
+      const existing = this.state.players.find((player) => player.id === playerId);
+      if (existing) {
+        existing.online = true;
+        existing.name = this.cleanName(playerName, existing.name);
+      } else {
+        if (this.state.players.length >= 10) {
+          this.transport.sendToPlayer(playerId, {
+            type: "game_notice",
+            level: "error",
+            message: "房間已滿"
+          });
+          return;
         }
-
-        return info;
-    }
-
-    // 開始任務
-    startMission() {
-        this.currentMission++;
-        this.selectedMembers = [];
-        this.votes = [];
-        
-        // 確保房主也在玩家列表中
-        const allPlayers = [...this.players];
-        if (this.transport.isHostPlayer()) {
-            const hostPlayer = {
-                id: this.transport.getCurrentPlayerId(),
-                name: '房主',
-                ready: true
-            };
-            if (!allPlayers.find(p => p.id === hostPlayer.id)) {
-                allPlayers.unshift(hostPlayer);
-            }
-        }
-        
-        // 檢查人數是否支援
-        const supportedPlayerCounts = [5, 6, 7, 8, 9, 10];
-        if (!supportedPlayerCounts.includes(allPlayers.length)) {
-            console.error(`不支援 ${allPlayers.length} 人遊戲，需要 5-10 人`);
-            return;
-        }
-        
-        const missionSize = this.getMissionSize(this.currentMission, allPlayers.length);
-        
-        this.transport.broadcast({
-            type: 'game_state',
-            state: 'MISSION_SELECTION',
-            missionNumber: this.currentMission,
-            missionSize: missionSize,
-            leader: allPlayers[this.currentLeader].id
+        this.state.players.push({
+          id: playerId,
+          name: this.cleanName(playerName, `玩家${String(playerId).slice(-4)}`),
+          online: true,
+          isHost: false
         });
+      }
 
-        this.triggerGameEvent('missionStarted', {
-            missionNumber: this.currentMission,
-            missionSize: missionSize,
-            leader: allPlayers[this.currentLeader].id
+      this.publishState(`${this.playerName(playerId)} 加入房間`);
+      this.emit("playerJoined", { playerId, playerName: this.playerName(playerId) });
+    }
+
+    disconnectPlayer(playerId) {
+      const player = this.state.players.find((item) => item.id === playerId);
+      if (!player) return;
+
+      if (this.state.phase === PHASES.WAITING) {
+        this.state.players = this.state.players.filter((item) => item.id !== playerId);
+      } else {
+        player.online = false;
+      }
+      this.publishState(`${player.name} 已離線`);
+    }
+
+    canStart() {
+      return this.state.phase === PHASES.WAITING
+        && this.state.players.length >= 5
+        && this.state.players.length <= 10
+        && this.state.players.every((player) => player.online);
+    }
+
+    startGame() {
+      if (!this.transport.isHostPlayer()) return;
+      if (!this.canStart()) {
+        this.emit("notice", { level: "error", message: "需要 5–10 位在線玩家才能開始" });
+        return;
+      }
+
+      const roleNames = this.shuffle([...ROLE_CONFIG[this.state.players.length]]);
+      this.roles = this.state.players.map((player, index) => ({
+        playerId: player.id,
+        role: roleNames[index],
+        isGood: GOOD_ROLES.has(roleNames[index])
+      }));
+
+      this.roles.forEach((roleInfo) => {
+        this.transport.sendToPlayer(roleInfo.playerId, {
+          type: "private_role",
+          role: roleInfo.role,
+          isGood: roleInfo.isGood,
+          knowledge: this.getKnowledge(roleInfo)
         });
+      });
+
+      this.state.currentMission = 1;
+      this.state.currentLeaderId = this.state.players[0].id;
+      this.state.missionResults = [];
+      this.state.winner = null;
+      this.beginTeamSelection("角色已分配，第一輪任務開始");
     }
 
-    // 添加房主玩家
-    addHostPlayer() {
-        const hostPlayer = {
-            id: this.transport.getCurrentPlayerId(),
-            name: '房主',
-            ready: true
-        };
-        
-        // 檢查房主是否已存在
-        if (!this.players.find(p => p.id === hostPlayer.id)) {
-            this.players.push(hostPlayer);
-            console.log('房主已添加到玩家列表:', hostPlayer);
+    shuffle(values) {
+      for (let index = values.length - 1; index > 0; index -= 1) {
+        const random = new Uint32Array(1);
+        crypto.getRandomValues(random);
+        const swapIndex = random[0] % (index + 1);
+        [values[index], values[swapIndex]] = [values[swapIndex], values[index]];
+      }
+      return values;
+    }
+
+    getKnowledge(roleInfo) {
+      const findNames = (predicate) => this.roles
+        .filter(predicate)
+        .map((role) => this.playerName(role.playerId));
+
+      if (roleInfo.role === "Merlin") {
+        return findNames((role) => !role.isGood && role.role !== "Mordred");
+      }
+      if (roleInfo.role === "Percival") {
+        return findNames((role) => role.role === "Merlin" || role.role === "Morgana");
+      }
+      if (!roleInfo.isGood && roleInfo.role !== "Oberon") {
+        return findNames((role) => !role.isGood && role.role !== "Oberon" && role.playerId !== roleInfo.playerId);
+      }
+      return [];
+    }
+
+    submitAction(action, payload = {}) {
+      const message = {
+        type: "player_action",
+        playerId: this.transport.getCurrentPlayerId(),
+        action,
+        payload
+      };
+
+      if (this.transport.isHostPlayer()) {
+        this.handleAction(message.playerId, action, payload);
+      } else {
+        this.transport.send(message);
+      }
+    }
+
+    handleAction(playerId, action, payload) {
+      const player = this.state.players.find((item) => item.id === playerId && item.online);
+      if (!player) return;
+
+      if (action === "select_team") {
+        this.selectTeam(playerId, payload.members);
+      } else if (action === "mission_vote") {
+        this.recordMissionVote(playerId, payload.success);
+      } else if (action === "assassinate") {
+        this.assassinate(playerId, payload.targetId);
+      }
+    }
+
+    selectTeam(playerId, members) {
+      if (this.state.phase !== PHASES.TEAM_SELECTION || playerId !== this.state.currentLeaderId) return;
+      const required = this.getMissionSize();
+      const uniqueMembers = Array.from(new Set(Array.isArray(members) ? members : []));
+      const validIds = new Set(this.state.players.filter((player) => player.online).map((player) => player.id));
+
+      if (uniqueMembers.length !== required || uniqueMembers.some((id) => !validIds.has(id))) {
+        this.sendNotice(playerId, "請選擇正確數量的在線玩家");
+        return;
+      }
+
+      this.state.phase = PHASES.MISSION_VOTE;
+      this.state.selectedMembers = uniqueMembers;
+      this.state.submittedVoteIds = [];
+      this.pendingVotes = new Map();
+      this.publishState(`第 ${this.state.currentMission} 輪隊伍已選定`);
+    }
+
+    recordMissionVote(playerId, success) {
+      if (this.state.phase !== PHASES.MISSION_VOTE) return;
+      if (!this.state.selectedMembers.includes(playerId) || this.state.submittedVoteIds.includes(playerId)) return;
+
+      const role = this.roles.find((item) => item.playerId === playerId);
+      const finalVote = role?.isGood ? true : Boolean(success);
+      this.pendingVotes.set(playerId, finalVote);
+      this.state.submittedVoteIds.push(playerId);
+      this.publishState(`${this.state.submittedVoteIds.length} / ${this.state.selectedMembers.length} 人已提交`);
+
+      if (this.state.submittedVoteIds.length === this.state.selectedMembers.length) {
+        this.resolveMission();
+      }
+    }
+
+    resolveMission() {
+      const votes = Array.from(this.pendingVotes.values());
+      const failVotes = votes.filter((vote) => !vote).length;
+      const requiredFails = this.getRequiredFails();
+      const success = failVotes < requiredFails;
+
+      this.state.missionResults.push({
+        mission: this.state.currentMission,
+        success,
+        failVotes,
+        requiredFails,
+        members: [...this.state.selectedMembers]
+      });
+
+      const score = this.getScore();
+      if (score.good >= 3) {
+        this.state.phase = PHASES.ASSASSINATION;
+        this.state.selectedMembers = [];
+        this.state.submittedVoteIds = [];
+        this.publishState("三次任務成功，刺客獲得最後一次機會");
+        return;
+      }
+
+      if (score.evil >= 3) {
+        this.finishGame("evil", "邪惡陣營破壞了三次任務");
+        return;
+      }
+
+      this.rotateLeader();
+      this.state.currentMission += 1;
+      this.beginTeamSelection(success ? "任務成功" : "任務失敗");
+    }
+
+    beginTeamSelection(message) {
+      this.state.phase = PHASES.TEAM_SELECTION;
+      this.state.selectedMembers = [];
+      this.state.submittedVoteIds = [];
+      this.pendingVotes = new Map();
+      this.publishState(message);
+    }
+
+    rotateLeader() {
+      const currentIndex = this.state.players.findIndex((player) => player.id === this.state.currentLeaderId);
+      for (let offset = 1; offset <= this.state.players.length; offset += 1) {
+        const candidate = this.state.players[(currentIndex + offset) % this.state.players.length];
+        if (candidate.online) {
+          this.state.currentLeaderId = candidate.id;
+          return;
         }
+      }
     }
 
-    // 處理玩家加入
-    handlePlayerJoined(data) {
-        console.log('遊戲邏輯層處理玩家加入:', data);
-        
-        // 檢查玩家是否已存在，防止重複添加
-        if (this.players.find(p => p.id === data.playerId)) {
-            console.log('玩家已存在，跳過添加');
-            return;
-        }
-        
-        const newPlayer = {
-            id: data.playerId,
-            name: data.playerName || `玩家${data.playerId.substr(-4)}`,
-            ready: false
-        };
-        
-        this.players.push(newPlayer);
-        console.log('添加新玩家:', newPlayer);
-        console.log('當前玩家列表:', this.players);
-        
-        // 廣播玩家列表更新
-        this.transport.broadcast({
-            type: 'player_list_update',
-            players: this.players
-        });
-        
-        // 觸發玩家加入事件
-        this.triggerGameEvent('playerJoined', {
-            player: newPlayer,
-            totalPlayers: this.players.length
-        });
+    assassinate(playerId, targetId) {
+      if (this.state.phase !== PHASES.ASSASSINATION) return;
+      const actorRole = this.roles.find((role) => role.playerId === playerId);
+      const targetRole = this.roles.find((role) => role.playerId === targetId);
+      if (actorRole?.role !== "Assassin" || !targetRole) return;
+
+      if (targetRole.role === "Merlin") {
+        this.finishGame("evil", `刺客成功找出 ${this.playerName(targetId)}（梅林）`);
+      } else {
+        this.finishGame("good", `刺客誤判了 ${this.playerName(targetId)}，正義陣營獲勝`);
+      }
     }
 
-    // 處理玩家準備
-    handlePlayerReady(msg) {
-        const player = this.players.find(p => p.id === msg.playerId);
-        if (player) {
-            player.ready = true;
-            this.transport.broadcast({
-                type: 'player_list_update',
-                players: this.players
-            });
-        }
+    finishGame(winner, message) {
+      this.state.phase = PHASES.GAME_END;
+      this.state.winner = winner;
+      this.state.message = message;
+      this.state.revealedRoles = this.roles.map((role) => ({
+        playerId: role.playerId,
+        role: role.role,
+        isGood: role.isGood
+      }));
+      this.state.selectedMembers = [];
+      this.state.submittedVoteIds = [];
+      this.publishState(message);
+      this.transport.broadcast({
+        type: "game_notice",
+        level: "result",
+        message
+      });
     }
 
-    // 處理角色分配
-    handleRoleAssignment(msg) {
-        // 這個訊息是發給特定玩家的，不需要廣播
-        console.log('角色分配完成');
+    getMissionSize(mission = this.state.currentMission) {
+      const sizes = MISSION_SIZES[this.state.players.length] || MISSION_SIZES[5];
+      return sizes[Math.max(0, mission - 1)];
     }
 
-    // 處理任務投票
-    handleMissionVote(msg) {
-        this.votes.push({
-            playerId: msg.playerId,
-            vote: msg.vote
-        });
-
-        this.triggerGameEvent('voteReceived', { vote: msg });
-
-        if (this.votes.length === this.selectedMembers.length) {
-            this.processMissionResult();
-        }
+    getRequiredFails() {
+      return this.state.players.length >= 7 && this.state.currentMission === 4 ? 2 : 1;
     }
 
-    // 處理遊戲動作
-    handleGameAction(msg) {
-        switch (msg.action) {
-            case 'start_game':
-                this.assignRoles();
-                break;
-            case 'select_members':
-                this.selectedMembers = msg.members;
-                this.startVoting();
-                break;
-            case 'assassinate':
-                this.handleAssassination(msg.target);
-                break;
-        }
+    getScore() {
+      return {
+        good: this.state.missionResults.filter((result) => result.success).length,
+        evil: this.state.missionResults.filter((result) => !result.success).length
+      };
     }
 
-    // 開始投票
-    startVoting() {
-        this.votes = [];
-        this.gameState = 'MISSION_VOTE';
-        
-        this.transport.broadcast({
-            type: 'game_state',
-            state: 'MISSION_VOTE',
-            selectedMembers: this.selectedMembers
-        });
-
-        this.triggerGameEvent('votingStarted', { selectedMembers: this.selectedMembers });
+    getState() {
+      return typeof structuredClone === "function"
+        ? structuredClone(this.state)
+        : JSON.parse(JSON.stringify(this.state));
     }
 
-    // 處理任務結果
-    processMissionResult() {
-        const successVotes = this.votes.filter(v => v.vote).length;
-        const missionSuccess = successVotes === this.selectedMembers.length;
-        
-        this.missionResults.push({
-            mission: this.currentMission,
-            success: missionSuccess,
-            votes: this.votes
-        });
-
-        this.transport.broadcast({
-            type: 'mission_result',
-            missionNumber: this.currentMission,
-            success: missionSuccess,
-            votes: this.votes
-        });
-
-        this.triggerGameEvent('missionCompleted', {
-            missionNumber: this.currentMission,
-            success: missionSuccess,
-            votes: this.votes
-        });
-
-        // 檢查遊戲是否結束
-        const goodWins = this.missionResults.filter(r => r.success).length >= 3;
-        const evilWins = this.missionResults.filter(r => !r.success).length >= 3;
-
-        if (goodWins || evilWins) {
-            this.endGame(goodWins ? 'good' : 'evil');
-        } else {
-            // 確保房主也在玩家列表中進行隊長輪換
-            let allPlayers = [...this.players];
-            if (this.transport.isHostPlayer()) {
-                const hostPlayer = {
-                    id: this.transport.getCurrentPlayerId(),
-                    name: '房主',
-                    ready: true
-                };
-                if (!allPlayers.find(p => p.id === hostPlayer.id)) {
-                    allPlayers.unshift(hostPlayer);
-                }
-            }
-            
-            // 檢查人數是否支援
-            const supportedPlayerCounts = [5, 6, 7, 8, 9, 10];
-            if (!supportedPlayerCounts.includes(allPlayers.length)) {
-                console.error(`不支援 ${allPlayers.length} 人遊戲，需要 5-10 人`);
-                return;
-            }
-            
-            // 輪換隊長
-            this.currentLeader = (this.currentLeader + 1) % allPlayers.length;
-            this.startMission();
-        }
+    sanitizeSnapshot(snapshot) {
+      const next = this.createInitialState();
+      return {
+        ...next,
+        ...snapshot,
+        players: Array.isArray(snapshot?.players) ? snapshot.players : [],
+        selectedMembers: Array.isArray(snapshot?.selectedMembers) ? snapshot.selectedMembers : [],
+        submittedVoteIds: Array.isArray(snapshot?.submittedVoteIds) ? snapshot.submittedVoteIds : [],
+        missionResults: Array.isArray(snapshot?.missionResults) ? snapshot.missionResults : [],
+        revealedRoles: Array.isArray(snapshot?.revealedRoles) ? snapshot.revealedRoles : []
+      };
     }
 
-    // 結束遊戲
-    endGame(winner) {
-        this.gameState = 'GAME_END';
-        
-        this.transport.broadcast({
-            type: 'game_result',
-            winner: winner,
-            missionResults: this.missionResults,
-            roles: this.roles
-        });
-
-        this.triggerGameEvent('gameEnded', {
-            winner: winner,
-            missionResults: this.missionResults,
-            roles: this.roles
-        });
-
-        // 如果壞人獲勝，啟動刺殺階段
-        if (winner === 'evil') {
-            this.transport.broadcast({
-                type: 'assassination_phase',
-                roles: this.roles
-            });
-        }
+    publishState(message) {
+      this.state.message = message || this.state.message;
+      const snapshot = this.getState();
+      this.emit("state", snapshot);
+      if (this.transport.isHostPlayer()) {
+        this.transport.broadcast({ type: "state_snapshot", state: snapshot });
+      }
     }
 
-    // 處理刺殺
-    handleAssassination(targetId) {
-        const targetRole = this.roles.find(r => r.playerId === targetId);
-        const assassinWins = targetRole && targetRole.role === 'Merlin';
-        
-        this.transport.broadcast({
-            type: 'assassination_result',
-            target: targetId,
-            assassinWins: assassinWins,
-            finalWinner: assassinWins ? 'evil' : 'good'
-        });
-
-        this.triggerGameEvent('assassinationCompleted', {
-            target: targetId,
-            assassinWins: assassinWins,
-            finalWinner: assassinWins ? 'evil' : 'good'
-        });
+    syncToPlayer(playerId) {
+      if (!this.transport.isHostPlayer()) return;
+      this.transport.sendToPlayer(playerId, {
+        type: "state_snapshot",
+        state: this.getState()
+      });
     }
 
-    // 獲取遊戲狀態
-    getGameState() {
-        // 確保房主也在玩家列表中
-        let allPlayers = [...this.players];
-        if (this.transport.isHostPlayer()) {
-            const hostPlayer = {
-                id: this.transport.getCurrentPlayerId(),
-                name: '房主',
-                ready: true
-            };
-            if (!allPlayers.find(p => p.id === hostPlayer.id)) {
-                allPlayers.unshift(hostPlayer);
-            }
-        }
-        
-        // 檢查人數是否支援
-        const supportedPlayerCounts = [5, 6, 7, 8, 9, 10];
-        const isSupported = supportedPlayerCounts.includes(allPlayers.length);
-        
-        return {
-            state: this.gameState,
-            players: allPlayers,
-            roles: this.roles,
-            currentMission: this.currentMission,
-            missionResults: this.missionResults,
-            currentLeader: this.currentLeader,
-            selectedMembers: this.selectedMembers,
-            votes: this.votes,
-            isSupported: isSupported,
-            supportedPlayerCounts: supportedPlayerCounts
-        };
+    sendNotice(playerId, message) {
+      this.transport.sendToPlayer(playerId, {
+        type: "game_notice",
+        level: "error",
+        message
+      });
     }
 
-    // 同步遊戲狀態（用於新玩家加入時）
-    syncGameState(gameState) {
-        if (gameState.players) {
-            this.players = gameState.players;
-        }
-        if (gameState.roles) {
-            this.roles = gameState.roles;
-        }
-        if (gameState.missionResults) {
-            this.missionResults = gameState.missionResults;
-        }
-        this.gameState = gameState.state || this.gameState;
-        this.currentMission = gameState.currentMission || this.currentMission;
-        this.currentLeader = gameState.currentLeader || this.currentLeader;
-        this.selectedMembers = gameState.selectedMembers || this.selectedMembers;
-        this.votes = gameState.votes || this.votes;
-        
-        console.log('遊戲狀態已同步:', this.getGameState());
+    playerName(playerId) {
+      return this.state.players.find((player) => player.id === playerId)?.name || "未知玩家";
     }
 
-    // 重置遊戲
-    resetGame() {
-        this.gameState = 'WAITING_FOR_PLAYERS';
-        this.players = [];
-        this.roles = [];
-        this.currentMission = 0;
-        this.missionResults = [];
-        this.currentLeader = 0;
-        this.selectedMembers = [];
-        this.votes = [];
+    getRoleForCurrentPlayer() {
+      return this.myRole ? { ...this.myRole, knowledge: [...this.myRole.knowledge] } : null;
     }
 
-    // 檢查是否可以開始遊戲
-    canStartGame() {
-        // 確保房主也在玩家列表中
-        let totalPlayers = this.players.length;
-        if (this.transport.isHostPlayer()) {
-            totalPlayers += 1; // 加上房主
-        }
-        
-        // 檢查人數是否在支援的範圍內（5-10人）
-        const supportedPlayerCounts = [5, 6, 7, 8, 9, 10];
-        return supportedPlayerCounts.includes(totalPlayers);
+    reset() {
+      this.state = this.createInitialState();
+      this.roles = [];
+      this.myRole = null;
+      this.emit("state", this.getState());
     }
+  }
 
-    // 獲取當前隊長
-    getCurrentLeader() {
-        // 確保房主也在玩家列表中
-        let allPlayers = [...this.players];
-        if (this.transport.isHostPlayer()) {
-            const hostPlayer = {
-                id: this.transport.getCurrentPlayerId(),
-                name: '房主',
-                ready: true
-            };
-            if (!allPlayers.find(p => p.id === hostPlayer.id)) {
-                allPlayers.unshift(hostPlayer);
-            }
-        }
-        
-        // 檢查人數是否支援
-        const supportedPlayerCounts = [5, 6, 7, 8, 9, 10];
-        if (!supportedPlayerCounts.includes(allPlayers.length)) {
-            console.error(`不支援 ${allPlayers.length} 人遊戲，需要 5-10 人`);
-            return null;
-        }
-        
-        return allPlayers[this.currentLeader];
-    }
-
-    // 獲取任務進度
-    getMissionProgress() {
-        const goodWins = this.missionResults.filter(r => r.success).length;
-        const evilWins = this.missionResults.filter(r => !r.success).length;
-        return { goodWins, evilWins, totalMissions: this.missionResults.length };
-    }
-
-    // 處理房間訊息
-    handleRoomMessage(msg) {
-        // 廣播房間訊息給所有玩家
-        this.transport.broadcast({
-            type: 'room_message',
-            playerId: msg.playerId,
-            playerName: msg.playerName || `玩家${msg.playerId.substr(-4)}`,
-            message: msg.message,
-            timestamp: Date.now()
-        });
-    }
-}
-
-// 導出遊戲邏輯類別
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = AvalonGame;
-} 
+  global.AvalonGame = AvalonGame;
+  global.AVALON_PHASES = PHASES;
+})(window);
